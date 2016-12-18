@@ -210,79 +210,97 @@ elif MODEL == "CONV":
     phase_train = tf.placeholder(tf.bool, name='phase_train')
 
     #
-    def conv_layer(prev_layer, kernel_sizes, n_filter, name):
+    def conv_layer(prev_layer, kernel_size, n_filter, name):
         kernel_d = prev_layer.get_shape().as_list()[-1]
 
         with tf.name_scope(name):
+            w = tf.Variable(
+                tf.random_normal([kernel_size, kernel_size, kernel_d, n_filter],
+                                 stddev=0.1, dtype=tf.float32), name='weights')
+            b = tf.Variable(
+                tf.zeros([n_filter], dtype=tf.float32), name='biases')
+            z = tf.add(
+                tf.nn.conv2d(prev_layer, filter=w, strides=[1, 1, 1, 1], padding="SAME"),
+                b, name='zs')
+            a = tf.nn.elu(z, name='as')
 
-            sub_z = dict()
-            for i, ks in enumerate(kernel_sizes):
-                w = tf.Variable(
-                    tf.random_normal([ks, ks, kernel_d, n_filter],
-                                     stddev=0.1, dtype=tf.float32), name='kernels_'+str(i))
-                b = tf.Variable(
-                    tf.zeros([n_filter], dtype=tf.float32), name='biases_'+str(i))
-                sub_z[i] = tf.add(
-                    tf.nn.conv2d(prev_layer, filter=w, strides=[1, 1, 1, 1], padding="SAME"), b, name='zs_'+str(i))
+        return a
 
-            z = tf.concat(3, list(sub_z.values()))
-            total_n_filter = n_filter * len(sub_z)
-            batch_mean, batch_var = tf.nn.moments(z, [0, 1, 2])
-            beta = tf.Variable(tf.zeros(total_n_filter, dtype=tf.float32))
-            gamma = tf.Variable(tf.ones(total_n_filter, dtype=tf.float32))
+    #
+    def inception_layer(prev_layer, n_sub_reduced_depth, n_sub_filter, name):
+
+        with tf.name_scope(name):
+    
+            sub_1x1_r = conv_layer(prev_layer, 1, n_sub_reduced_depth, name + "_sub_1x1_r")
+            sub_3x3_r = conv_layer(prev_layer, 1, n_sub_reduced_depth, name + "_sub_3x3_r")
+            sub_3x3_c = conv_layer(sub_3x3_r, 3, n_sub_filter, name + "_sub_3x3_c")
+            sub_5x5_r = conv_layer(prev_layer, 1, n_sub_reduced_depth, name + "_sub_5x5_r")
+            sub_5x5_c = conv_layer(sub_5x5_r, 5, n_sub_filter, name + "_sub_5x5_c")
+            sub_max_m = max_pool_layer(prev_layer, 1, name + "_sub_max_m")
+            sub_max_r = conv_layer(sub_max_m, 1, n_sub_filter, name + "_sub_max_r")
+
+        return tf.concat(3, [sub_1x1_r, sub_3x3_c, sub_5x5_c, sub_max_r])
+
+    #
+    def conv_batch_normalize(layer, name):
+
+        with tf.name_scope(name):
+            n_filter = layer.get_shape().as_list()[-1]
+            batch_mean, batch_var = tf.nn.moments(layer, [0, 1, 2])
+            beta = tf.Variable(tf.zeros(n_filter, dtype=tf.float32))
+            gamma = tf.Variable(tf.ones(n_filter, dtype=tf.float32))
             ema = tf.train.ExponentialMovingAverage(decay=BATCH_NORMALIZATION_DECAY)
 
             def mean_var_with_update():
                 ema_apply_op = ema.apply([batch_mean, batch_var])
                 with tf.control_dependencies([ema_apply_op]):
                     return tf.identity(batch_mean), tf.identity(batch_var)
+
             mean, var = tf.cond(phase_train,
                                 mean_var_with_update,
                                 lambda: (ema.average(batch_mean), ema.average(batch_var)))
 
-            bn = tf.nn.batch_normalization(z, mean, var, beta, gamma, 1e-4)
-            a = tf.nn.elu(bn, name='as')
+            bn = tf.nn.batch_normalization(layer, mean, var, beta, gamma, 1e-4, name='bn')
 
-        return a
-
+        return bn
 
     #
-    def max_pool_layer(prev_layer, name):
+    def max_pool_layer(prev_layer, size, name):
         with tf.name_scope(name):
-            return tf.nn.max_pool(prev_layer, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding="SAME", name='as')
+            return tf.nn.max_pool(
+                prev_layer, ksize=[1, size, size, 1], strides=[1, size, size, 1],
+                padding="SAME", name='as')
 
     #
     def avg_pool_layer(prev_layer, name):
         with tf.name_scope(name):
-            return tf.nn.avg_pool(prev_layer, ksize=[1, 1, 1, 1], strides=[1, 1, 1, 1], padding="SAME", name='as')
+            return tf.nn.avg_pool(
+                prev_layer, ksize=[1, 1, 1, 1], strides=[1, 1, 1, 1], padding="SAME", name='as')
 
     #
-    def flat_layer(prev_layer, name):
+    def flatten(prev_layer, name):
         with tf.name_scope(name):
             length = np.prod(prev_layer.get_shape().as_list()[1:])
             f = tf.reshape(prev_layer, [-1, length], name='flatten')
 
         return f
 
-    hidden_layer_0_0 = conv_layer(input_layer, [1], 32, name='hidden_0_0')
-    hidden_layer_0_1 = conv_layer(hidden_layer_0_0, (1, 3, 5), 32, name='hidden_0_1')
-    hidden_layer_0_2 = max_pool_layer(hidden_layer_0_1, name='hidden_0_2')
     #
-    hidden_layer_1_0 = conv_layer(hidden_layer_0_2, [1], 64, name='hidden_1_0')
-    hidden_layer_1_1 = conv_layer(hidden_layer_1_0, [1, 3, 5], 64, name='hidden_1_1')
-    hidden_layer_1_2 = max_pool_layer(hidden_layer_1_1, name='hidden_1_2')
+    hidden_layer_0 = conv_layer(input_layer, 3, 64, name='hidden_0')
+    hidden_layer_0_bn = conv_batch_normalize(hidden_layer_0, name='hidden_0_bn')
     #
-    hidden_layer_2_0 = conv_layer(hidden_layer_1_2, [1], 128, name='hidden_2_0')
-    hidden_layer_2_1 = conv_layer(hidden_layer_2_0, [1, 3, 5], 128, name='hidden_2_1')
-    hidden_layer_2_2 = max_pool_layer(hidden_layer_2_1, name='hidden_2_2')
+    hidden_layer_1 = inception_layer(input_layer, 32, 32, name='hidden_1')
+    hidden_layer_1_bn = conv_batch_normalize(hidden_layer_1, name='hidden_1_bn')
     #
-    hidden_layer_3_0 = conv_layer(hidden_layer_2_2, [1], 256, name='hidden_3_0')
-    hidden_layer_3_1 = conv_layer(hidden_layer_3_0, [1, 3, 5], 256, name='hidden_3_1')
-    hidden_layer_3_2 = max_pool_layer(hidden_layer_3_1, name='hidden_3_2')
+    hidden_layer_2 = inception_layer(input_layer, 32, 64, name='hidden_2')
+    hidden_layer_2_bn = conv_batch_normalize(hidden_layer_1, name='hidden_2_bn')
     #
-    hidden_layer_4_0 = avg_pool_layer(hidden_layer_3_2, name='hidden_4')
+    hidden_layer_3 = inception_layer(input_layer, 32, 128, name='hidden_3')
+    hidden_layer_3_bn = conv_batch_normalize(hidden_layer_1, name='hidden_3_bn')
     #
-    hidden_layer_5 = flat_layer(hidden_layer_4_0, name='hidden_5')
+    hidden_layer_4_0 = avg_pool_layer(hidden_layer_3_bn, name='hidden_4')
+    #
+    hidden_layer_5 = flatten(hidden_layer_4_0, name='hidden_5')
     hidden_layer_6 = fc_layer(hidden_layer_5, 512, name='hidden_6')
     hidden_layer_last = fc_layer(hidden_layer_6, 512, name='hidden_last')
 
