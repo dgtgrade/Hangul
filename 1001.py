@@ -8,16 +8,17 @@ import tensorflow as tf
 #
 from PIL import Image, ImageFont, ImageDraw
 
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 #
-
+ONLY_ONE_EXAMPLE_PER_MINI_BATCH = True
+#
 VALID_RATIO = 0.05
-MINI_BATCH_SIZE = 500
+MINI_BATCH_SIZE = 1000
 # MODEL = "ALL_FC"
 MODEL = "CONV"
 SHOW_STATUS_PER_EPOCH = 1
 LEARNING_RATE = 1 * 1e-4
-N_FONTS = None  # None for All
+N_FONTS = 1  # None for All
 BATCH_NORMALIZATION_DECAY = 0.95
 TOTAL_EPOCHS = 10000
 
@@ -113,9 +114,9 @@ def 랜덤자():
     return chr(초중종번_조합번(초성번, 중성번, 종성번))
 
 
-def load_한글BMPs(n_fonts=N_FONTS):
-    한글BMPs = np.zeros((n_fonts, 한글총개수, FONT_WIDTH, FONT_HEIGHT),
-                      dtype=np.float16)
+def load_한글_BMPs(n_fonts=N_FONTS):
+    한글_BMPs = np.zeros((n_fonts, 한글총개수, FONT_WIDTH, FONT_HEIGHT),
+                       dtype=np.float16)
     #
     for font_i, font_fps in enumerate(fonts[0:n_fonts]):
 
@@ -144,7 +145,7 @@ def load_한글BMPs(n_fonts=N_FONTS):
                     imgnd = np.mean(np.array(img), axis=2, dtype=np.bool)  # rgb to gray
                     if np.count_nonzero(imgnd) == 0:
                         n_na += 1
-                    한글BMPs[font_i, 자번, :, :] = imgnd[:, :]
+                    한글_BMPs[font_i, 자번, :, :] = imgnd[:, :]
 
                     # if 자번 in [0, 7100, 9000]:
                     #     print(font_fps, 자, w, h)
@@ -153,7 +154,7 @@ def load_한글BMPs(n_fonts=N_FONTS):
                     #     plt.show(block=False)
                     #     plt.waitforbuttonpress()
         print("loaded {}/{} fonts".format(한글총개수-n_na, 한글총개수))
-    return 한글BMPs
+    return 한글_BMPs
 
 #
 codes = np.tile(np.arange(한글총개수), [N_FONTS])
@@ -168,7 +169,7 @@ labels_종[np.arange(N_FONTS * 한글총개수), codes_초중종[:, 2]] = True
 # print(labels_중)
 # print(labels_종)
 
-my_한글_BMPs = load_한글BMPs(n_fonts=N_FONTS)
+my_한글_BMPs = load_한글_BMPs(n_fonts=N_FONTS)
 my_한글_NAs = -(my_한글_BMPs.sum(-1).sum(-1).astype(np.bool))
 
 
@@ -197,6 +198,8 @@ if MODEL == "ALL_FC":
     hidden_layer_2 = fc_layer(hidden_layer_1, 512, name='hidden_2')
     hidden_layer_3 = fc_layer(hidden_layer_2, 512, name='hidden_3')
     hidden_layer_last = fc_layer(hidden_layer_3, 512, name='hidden_last')
+    #
+    init_feeds = {}
     #
 elif MODEL == "CONV":
     inputs = my_한글_BMPs.reshape(N_FONTS * 한글총개수, FONT_WIDTH, FONT_HEIGHT, 1).astype(np.float32)
@@ -253,7 +256,6 @@ elif MODEL == "CONV":
         with tf.name_scope(name):
             return tf.nn.avg_pool(prev_layer, ksize=[1, 1, 1, 1], strides=[1, 1, 1, 1], padding="SAME", name='as')
 
-
     #
     def flat_layer(prev_layer, name):
         with tf.name_scope(name):
@@ -283,6 +285,8 @@ elif MODEL == "CONV":
     hidden_layer_5 = flat_layer(hidden_layer_4_0, name='hidden_5')
     hidden_layer_6 = fc_layer(hidden_layer_5, 512, name='hidden_6')
     hidden_layer_last = fc_layer(hidden_layer_6, 512, name='hidden_last')
+
+    init_feeds = {phase_train: True}
 
 else:
     sys.exit(1)
@@ -316,7 +320,8 @@ accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 sess = tf.Session()
 
 #
-sess.run(tf.initialize_all_variables())
+init = tf.global_variables_initializer()
+sess.run(init, feed_dict=init_feeds)
 
 #
 valid_ixs = np.tile(np.random.random(한글총개수) < VALID_RATIO, [N_FONTS])
@@ -335,7 +340,10 @@ def feeds(set_str, n_batch=1, batch=0):
 
     batch_start = int(len(ixs) / n_batch) * batch
     next_batch_start = int(len(ixs) / n_batch) * (batch + 1)
-    batch_ixs = ixs[batch_start:next_batch_start]
+    if ONLY_ONE_EXAMPLE_PER_MINI_BATCH:
+        batch_ixs = ixs[batch_start:batch_start + 1]
+    else:
+        batch_ixs = ixs[batch_start:next_batch_start]
 
     return {
         phase_train: True if set_str == "train" else False,
