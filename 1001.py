@@ -10,7 +10,7 @@ from PIL import Image, ImageFont, ImageDraw
 
 # import matplotlib.pyplot as plt
 #
-ONLY_ONE_EXAMPLE_PER_MINI_BATCH = True
+ONLY_ONE_EXAMPLE_PER_MINI_BATCH = False
 #
 VALID_RATIO = 0.05
 MINI_BATCH_SIZE = 1000
@@ -18,7 +18,7 @@ MINI_BATCH_SIZE = 1000
 MODEL = "CONV"
 SHOW_STATUS_PER_EPOCH = 1
 LEARNING_RATE = 1 * 1e-4
-N_FONTS = 1  # None for All
+N_FONTS = None  # None for All
 BATCH_NORMALIZATION_DECAY = 0.95
 TOTAL_EPOCHS = 10000
 
@@ -231,7 +231,7 @@ elif MODEL == "CONV":
 
         with tf.name_scope(name):
     
-            sub_1x1_r = conv_layer(prev_layer, 1, n_sub_reduced_depth, name + "_sub_1x1_r")
+            sub_1x1_r = conv_layer(prev_layer, 1, n_sub_filter, name + "_sub_1x1_r")
             sub_3x3_r = conv_layer(prev_layer, 1, n_sub_reduced_depth, name + "_sub_3x3_r")
             sub_3x3_c = conv_layer(sub_3x3_r, 3, n_sub_filter, name + "_sub_3x3_c")
             sub_5x5_r = conv_layer(prev_layer, 1, n_sub_reduced_depth, name + "_sub_5x5_r")
@@ -272,10 +272,11 @@ elif MODEL == "CONV":
                 padding="SAME", name='as')
 
     #
-    def avg_pool_layer(prev_layer, name):
+    def avg_pool_layer(prev_layer, stride, name):
         with tf.name_scope(name):
             return tf.nn.avg_pool(
-                prev_layer, ksize=[1, 1, 1, 1], strides=[1, 1, 1, 1], padding="SAME", name='as')
+                prev_layer, ksize=[1, stride, stride, 1], strides=[1, stride, stride, 1],
+                padding="SAME", name='as')
 
     #
     def flatten(prev_layer, name):
@@ -286,21 +287,27 @@ elif MODEL == "CONV":
         return f
 
     #
-    hidden_layer_0 = conv_layer(input_layer, 3, 64, name='hidden_0')
+    hidden_layer_0 = conv_layer(input_layer, 7, 64, name='hidden_0')
     hidden_layer_0_bn = conv_batch_normalize(hidden_layer_0, name='hidden_0_bn')
+    hidden_layer_0_m = max_pool_layer(hidden_layer_0_bn, 2, name='hidden_0_m')
     #
-    hidden_layer_1 = inception_layer(input_layer, 32, 32, name='hidden_1')
+    hidden_layer_1 = inception_layer(hidden_layer_0_m, 32, 32, name='hidden_1')
     hidden_layer_1_bn = conv_batch_normalize(hidden_layer_1, name='hidden_1_bn')
+    hidden_layer_1_m = max_pool_layer(hidden_layer_1_bn, 2, name='hidden_1_m')
     #
-    hidden_layer_2 = inception_layer(input_layer, 32, 64, name='hidden_2')
-    hidden_layer_2_bn = conv_batch_normalize(hidden_layer_1, name='hidden_2_bn')
+    hidden_layer_2 = inception_layer(hidden_layer_1_m, 48, 48, name='hidden_2')
+    hidden_layer_2_bn = conv_batch_normalize(hidden_layer_2, name='hidden_2_bn')
+    hidden_layer_2_m = max_pool_layer(hidden_layer_2_bn, 2, name='hidden_2_m')
     #
-    hidden_layer_3 = inception_layer(input_layer, 32, 128, name='hidden_3')
-    hidden_layer_3_bn = conv_batch_normalize(hidden_layer_1, name='hidden_3_bn')
+    hidden_layer_3 = inception_layer(hidden_layer_2_m, 64, 64, name='hidden_3')
+    hidden_layer_3_bn = conv_batch_normalize(hidden_layer_3, name='hidden_3_bn')
+    hidden_layer_3_m = max_pool_layer(hidden_layer_3_bn, 2, name='hidden_3_m')
     #
-    hidden_layer_4_0 = avg_pool_layer(hidden_layer_3_bn, name='hidden_4')
+    hidden_layer_4 = inception_layer(hidden_layer_3_m, 96, 96, name='hidden_4')
+    hidden_layer_4_bn = conv_batch_normalize(hidden_layer_4, name='hidden_4_bn')
+    hidden_layer_4_a = avg_pool_layer(hidden_layer_4_bn, 1, name='hidden_4_a')
     #
-    hidden_layer_5 = flatten(hidden_layer_4_0, name='hidden_5')
+    hidden_layer_5 = flatten(hidden_layer_4_a, name='hidden_5')
     hidden_layer_6 = fc_layer(hidden_layer_5, 512, name='hidden_6')
     hidden_layer_last = fc_layer(hidden_layer_6, 512, name='hidden_last')
 
