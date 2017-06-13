@@ -122,5 +122,5 @@ y_test = model.predict(x_test)
 
 #
 for i in range(len(y_test)):
-    show_font(y_test[i])
+    show_font(y_test[i].squeeze())
 
